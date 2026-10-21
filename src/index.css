@@ -1,0 +1,222 @@
+@import "tailwindcss";
+
+/* ============================================================================
+   EVERMYST TACTICAL DARK THEME
+   ============================================================================ */
+
+@theme {
+  /* Background layers */
+  --color-evermyst-bg: #0B0F19;
+  --color-evermyst-surface: #111827;
+  --color-evermyst-card: #1E293B;
+  --color-evermyst-card-hover: #263549;
+  --color-evermyst-border: #334155;
+  --color-evermyst-border-light: #475569;
+
+  /* Text */
+  --color-evermyst-text: #F1F5F9;
+  --color-evermyst-text-muted: #94A3B8;
+  --color-evermyst-text-dim: #64748B;
+
+  /* Accent: Lumen (Amber) */
+  --color-lumen: #F59E0B;
+  --color-lumen-light: #FCD34D;
+  --color-lumen-dark: #D97706;
+  --color-lumen-glow: #F59E0B33;
+
+  /* Success: Emerald */
+  --color-success: #10B981;
+  --color-success-light: #34D399;
+  --color-success-dark: #059669;
+  --color-success-glow: #10B98133;
+
+  /* Props: Purple */
+  --color-props: #8B5CF6;
+  --color-props-light: #A78BFA;
+  --color-props-dark: #7C3AED;
+  --color-props-glow: #8B5CF633;
+
+  /* Danger: Red */
+  --color-danger: #EF4444;
+  --color-danger-light: #F87171;
+  --color-danger-dark: #DC2626;
+  --color-danger-glow: #EF444433;
+
+  /* Info: Blue */
+  --color-info: #3B82F6;
+  --color-info-light: #60A5FA;
+  --color-info-dark: #2563EB;
+
+  /* Fonts */
+  --font-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* ============================================================================
+   BASE STYLES
+   ============================================================================ */
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    margin: 0;
+    padding: 0;
+    background: var(--color-evermyst-bg);
+    color: var(--color-evermyst-text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--color-evermyst-bg);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-evermyst-border);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-evermyst-border-light);
+  }
+
+  /* Number input spinner removal */
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] {
+    -moz-appearance: textfield;
+  }
+}
+
+/* ============================================================================
+   COMPONENT UTILITIES
+   ============================================================================ */
+@layer utilities {
+  .glass-card {
+    background: linear-gradient(135deg, rgba(30, 41, 59, 0.8), rgba(17, 24, 39, 0.9));
+    border: 1px solid rgba(51, 65, 85, 0.5);
+    backdrop-filter: blur(12px);
+    border-radius: 12px;
+  }
+
+  .glow-lumen {
+    box-shadow: 0 0 20px rgba(245, 158, 11, 0.15), 0 0 60px rgba(245, 158, 11, 0.05);
+  }
+
+  .glow-success {
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.15), 0 0 60px rgba(16, 185, 129, 0.05);
+  }
+
+  .glow-danger {
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.15), 0 0 60px rgba(239, 68, 68, 0.05);
+  }
+
+  .glow-props {
+    box-shadow: 0 0 20px rgba(139, 92, 246, 0.15), 0 0 60px rgba(139, 92, 246, 0.05);
+  }
+
+  .text-glow-lumen {
+    text-shadow: 0 0 10px rgba(245, 158, 11, 0.5);
+  }
+}
+
+/* ============================================================================
+   ANIMATIONS
+   ============================================================================ */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 5px rgba(245, 158, 11, 0.2); }
+  50% { box-shadow: 0 0 20px rgba(245, 158, 11, 0.4); }
+}
+
+@keyframes shield-shimmer {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+@keyframes toast-enter {
+  from { opacity: 0; transform: translateX(100%); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes toast-exit {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(100%); }
+}
+
+@keyframes countdown-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.animate-fadeIn { animation: fadeIn 0.3s ease-out; }
+.animate-slideUp { animation: slideUp 0.4s ease-out; }
+.animate-slideDown { animation: slideDown 0.3s ease-out; }
+.animate-pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
+.animate-toast-enter { animation: toast-enter 0.3s ease-out; }
+.animate-toast-exit { animation: toast-exit 0.3s ease-in forwards; }
+.animate-countdown { animation: countdown-pulse 1s ease-in-out infinite; }
+
+.shield-shimmer {
+  background: linear-gradient(90deg, transparent, rgba(139, 92, 246, 0.3), transparent);
+  background-size: 200% 100%;
+  animation: shield-shimmer 3s ease-in-out infinite;
+}
+
+/* ============================================================================
+   MOBILE OPTIMIZATIONS
+   ============================================================================ */
+@media (max-width: 768px) {
+  .mobile-touch-target {
+    min-height: 48px;
+    min-width: 48px;
+  }
+}
+
+/* Toast container */
+.toast-container {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 400px;
+}
+
+@media (max-width: 768px) {
+  .toast-container {
+    left: 16px;
+    right: 16px;
+    max-width: none;
+  }
+}

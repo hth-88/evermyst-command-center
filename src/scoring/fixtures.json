@@ -1,0 +1,105 @@
+{
+  "test_cases": [
+    {
+      "id": "tier_valid_mid",
+      "scoring_type": "tier",
+      "scoring_config": {
+        "tiers": [
+          { "tier": "low", "label": "Mức Vớt", "points": 20 },
+          { "tier": "mid", "label": "Mức Đạt", "points": 35 },
+          { "tier": "high", "label": "Xuất Sắc", "points": 50 }
+        ]
+      },
+      "min_score": 10,
+      "max_score": 50,
+      "input": { "tier": "mid" },
+      "expected_points": 35,
+      "is_valid": true
+    },
+    {
+      "id": "tier_valid_low",
+      "scoring_type": "tier",
+      "scoring_config": {
+        "tiers": [
+          { "tier": "low", "label": "Mức Vớt", "points": 20 },
+          { "tier": "mid", "label": "Mức Đạt", "points": 35 },
+          { "tier": "high", "label": "Xuất Sắc", "points": 50 }
+        ]
+      },
+      "min_score": 10,
+      "max_score": 50,
+      "input": { "tier": "low" },
+      "expected_points": 20,
+      "is_valid": true
+    },
+    {
+      "id": "tier_invalid_missing",
+      "scoring_type": "tier",
+      "scoring_config": {
+        "tiers": [
+          { "tier": "low", "points": 20 },
+          { "tier": "mid", "points": 35 }
+        ]
+      },
+      "min_score": 10,
+      "max_score": 50,
+      "input": { "tier": "god" },
+      "expected_points": 0,
+      "is_valid": false,
+      "expected_error": "Tier không tồn tại trong cấu hình trạm"
+    },
+    {
+      "id": "fixed_valid_completed",
+      "scoring_type": "fixed",
+      "scoring_config": {
+        "points": 30
+      },
+      "min_score": 0,
+      "max_score": 30,
+      "input": { "completed": true },
+      "expected_points": 30,
+      "is_valid": true
+    },
+    {
+      "id": "fixed_valid_incomplete",
+      "scoring_type": "fixed",
+      "scoring_config": {
+        "points": 30
+      },
+      "min_score": 0,
+      "max_score": 30,
+      "input": { "completed": false },
+      "expected_points": 0,
+      "is_valid": true
+    },
+    {
+      "id": "time_attack_valid_4_units",
+      "scoring_type": "time_attack",
+      "scoring_config": {
+        "base_points": 10,
+        "unit_points": 5,
+        "max_units": 10
+      },
+      "min_score": 10,
+      "max_score": 60,
+      "input": { "units": 4 },
+      "expected_points": 30,
+      "is_valid": true
+    },
+    {
+      "id": "time_attack_exceed_max_units",
+      "scoring_type": "time_attack",
+      "scoring_config": {
+        "base_points": 10,
+        "unit_points": 5,
+        "max_units": 10
+      },
+      "min_score": 10,
+      "max_score": 60,
+      "input": { "units": 99 },
+      "expected_points": 0,
+      "is_valid": false,
+      "expected_error": "Số lượng vượt quá giới hạn tối đa cho phép"
+    }
+  ]
+}
