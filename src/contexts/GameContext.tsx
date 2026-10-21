@@ -39,6 +39,7 @@ import {
   setServerOffset,
 } from '@/lib/utils';
 import { DEFAULT_CONFIG, DEFAULT_ITEMS, DEFAULT_HINTS } from '@/lib/constants';
+import { DEFAULT_FALLBACK_TIERS } from '@/components/scoring/StationScoringForm';
 
 // ---------------------------------------------------------------------------
 // Context Shape
@@ -84,7 +85,7 @@ interface GameContextType {
   teamStationKeys: Record<string, string[]>;
 
   // Actions - PvP
-  resolvePvP: (attackerId: string, defenderId: string) => Promise<PvPResponse>;
+  resolvePvP: (attackerId: string, defenderId: string, attackCost?: number) => Promise<PvPResponse>;
 
   // Actions - Transactions & Reversal
   decidePending: (txId: string, decision: 'approve' | 'reject', reason?: string) => Promise<RPCResponse>;
@@ -118,6 +119,29 @@ const GameContext = createContext<GameContextType | null>(null);
 // ---------------------------------------------------------------------------
 // Default config values (Fallback trước khi đọc DB)
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Helpers: Local Storage Shields Cache (Chống mất khiên khi reload/đổi nick)
+// ---------------------------------------------------------------------------
+const getLocalShields = (): Record<string, string> => {
+  try {
+    const s = typeof window !== 'undefined' ? localStorage.getItem('evermyst_team_shields') : null;
+    return s ? JSON.parse(s) : {};
+  } catch {
+    return {};
+  }
+};
+
+const setLocalShield = (teamId: string, shieldUntil: string) => {
+  try {
+    if (typeof window === 'undefined') return;
+    const current = getLocalShields();
+    current[teamId] = shieldUntil;
+    localStorage.setItem('evermyst_team_shields', JSON.stringify(current));
+  } catch {
+    // ignore
+  }
+};
+
 // Provider
 // ---------------------------------------------------------------------------
 export function GameProvider({ children }: { children: ReactNode }) {
@@ -252,19 +276,57 @@ export function GameProvider({ children }: { children: ReactNode }) {
         supabase.from('team_station_keys').select('*'),
       ]);
 
-      if (teamsRes.data) setTeams(teamsRes.data);
+      if (teamsRes.data) {
+        const localShields = getLocalShields();
+        const mergedTeams = (teamsRes.data as Team[]).map((t) => {
+          const localEnd = localShields[t.id];
+          const localActive = localEnd && new Date(localEnd).getTime() > Date.now();
+          const dbEnd = t.shield_until;
+          const dbActive = dbEnd && new Date(dbEnd).getTime() > Date.now();
+
+          let finalShield = dbEnd;
+          if (localActive) {
+            if (!dbActive || new Date(localEnd).getTime() > new Date(dbEnd!).getTime()) {
+              finalShield = localEnd;
+            }
+          }
+          return {
+            ...t,
+            shield_until: finalShield,
+          };
+        });
+        setTeams(mergedTeams);
+      }
 
       if (stationsRes.data) {
+        // Chuẩn hóa mọi trạm có scoring_type === 'tier' nhưng thiếu scoring_config?.tiers
+        const normalizedStations = (stationsRes.data as Station[]).map((st) => {
+          if (
+            st.scoring_type === 'tier' &&
+            (!Array.isArray((st.scoring_config as any)?.tiers) ||
+              (st.scoring_config as any).tiers.length === 0)
+          ) {
+            return {
+              ...st,
+              scoring_config: {
+                ...(st.scoring_config || {}),
+                tiers: DEFAULT_FALLBACK_TIERS,
+              },
+            };
+          }
+          return st;
+        });
+
         // Deduplicate stations by order_index
         const uniqueStations: Station[] = [];
         const seenOrder = new Set<number>();
-        stationsRes.data.forEach((st: Station) => {
+        normalizedStations.forEach((st: Station) => {
           if (!seenOrder.has(st.order_index)) {
             seenOrder.add(st.order_index);
             uniqueStations.push(st);
           }
         });
-        setStations(uniqueStations.length > 0 ? uniqueStations : stationsRes.data);
+        setStations(uniqueStations.length > 0 ? uniqueStations : normalizedStations);
       }
 
       // Hints standardization & deduplication
@@ -354,7 +416,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
       }
 
       // Sync team_station_keys
-      if (keysRes?.data && keysRes.data.length > 0) {
+      if (keysRes?.data) {
         const keyMap: Record<string, string[]> = {};
         keysRes.data.forEach((k: any) => {
           if (!keyMap[k.team_id]) keyMap[k.team_id] = [];
@@ -362,18 +424,12 @@ export function GameProvider({ children }: { children: ReactNode }) {
             keyMap[k.team_id].push(k.station_id);
           }
         });
-        setTeamStationKeys((prev) => {
-          const merged = { ...prev };
-          Object.keys(keyMap).forEach((tid) => {
-            merged[tid] = Array.from(new Set([...(merged[tid] || []), ...keyMap[tid]]));
-          });
-          try {
-            localStorage.setItem('evermyst_team_station_keys', JSON.stringify(merged));
-          } catch {
-            // ignore
-          }
-          return merged;
-        });
+        setTeamStationKeys(keyMap);
+        try {
+          localStorage.setItem('evermyst_team_station_keys', JSON.stringify(keyMap));
+        } catch {
+          // ignore
+        }
       }
 
       if (txRes.data) setTransactions(txRes.data);
@@ -867,12 +923,28 @@ export function GameProvider({ children }: { children: ReactNode }) {
           addToast(rpcRes.message || 'Sử dụng đạo cụ thành công!', 'success');
           refreshAll();
           return rpcRes;
+        } else if (rpcRes.code === 'KEY_ALREADY_EXISTS' || rpcRes.error === 'Trạm này đã được cắm Chìa Khóa Vạn Năng từ trước!') {
+          addToast(rpcRes.error || 'Trạm này đã được cắm Chìa Khóa Vạn Năng từ trước!', 'warning');
+          return rpcRes;
         }
       } catch (e) {
         console.warn('RPC use_item failed, entering resilient fallback:', e);
       }
 
       // RESILIENT CLIENT FALLBACK:
+      // 0. Pre-validate key to prevent deducting quantity if station already has key
+      if (isKey) {
+        if (!targetStationId) {
+          addToast('Vui lòng chọn trạm mục tiêu để cắm chìa khóa.', 'warning');
+          return { success: false, error: 'Chưa chọn trạm mục tiêu' };
+        }
+        const existingKeys = teamStationKeys[teamId] || [];
+        if (existingKeys.includes(targetStationId)) {
+          addToast('Trạm này đã được cắm Chìa Khóa Vạn Năng từ trước!', 'warning');
+          return { success: false, error: 'STATION_ALREADY_HAS_KEY' };
+        }
+      }
+
       // 1. Check quantity
       const existingTeamItem = teamItems.find(
         (ti) => ti.team_id === teamId && (
@@ -911,18 +983,33 @@ export function GameProvider({ children }: { children: ReactNode }) {
         const currentShieldEnd = team?.shield_until ? new Date(team.shield_until).getTime() : 0;
         const now = Date.now();
         const baseTime = currentShieldEnd > now ? currentShieldEnd : now;
-        const newShieldUntil = new Date(baseTime + 20 * 60 * 1000).toISOString();
+        const fallbackShieldUntil = new Date(baseTime + 20 * 60 * 1000).toISOString();
+        let finalShieldUntil = fallbackShieldUntil;
 
-        // Update Supabase teams table
+        // Ưu tiên gọi RPC use_item trước để SECURITY DEFINER ghi shield_until bền vững xuống DB
         try {
-          await supabase.from('teams').update({ shield_until: newShieldUntil }).eq('id', teamId);
+          const rpcRes = await callRpc<any>('use_item', {
+            p_team_id: teamId,
+            p_item_code: 'shield',
+          });
+          if (rpcRes.success && rpcRes.shield_until) {
+            finalShieldUntil = rpcRes.shield_until;
+          }
         } catch (err) {
-          console.error('Error updating shield_until:', err);
+          console.error('Error calling use_item RPC:', err);
         }
 
-        // Update local teams state immediately -> TopBar will count down right away!
+        // Luôn ghi trực tiếp xuống DB để đảm bảo cột teams.shield_until chắc chắn có dữ liệu
+        try {
+          await supabase.from('teams').update({ shield_until: finalShieldUntil }).eq('id', teamId);
+        } catch {
+          // ignore
+        }
+
+        // Lưu vào localStorage dự phòng & cập nhật state local teams
+        setLocalShield(teamId, finalShieldUntil);
         setTeams((prev) =>
-          prev.map((t) => (t.id === teamId ? { ...t, shield_until: newShieldUntil } : t))
+          prev.map((t) => (t.id === teamId ? { ...t, shield_until: finalShieldUntil } : t))
         );
 
         const msg = '🛡️ Đã kích hoạt Khiên Màn Sương! Đội được bảo vệ an toàn trong 20 phút.';
@@ -930,7 +1017,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
         return {
           success: true,
           item_code: 'shield',
-          shield_until: newShieldUntil,
+          shield_until: finalShieldUntil,
           message: msg,
         };
       }
@@ -965,19 +1052,14 @@ export function GameProvider({ children }: { children: ReactNode }) {
       }
 
       if (isKey) {
-        if (!targetStationId) {
-          addToast('Vui lòng chọn trạm mục tiêu để cắm chìa khóa.', 'warning');
-          return { success: false, error: 'Chưa chọn trạm mục tiêu' };
-        }
-
         const station = stations.find((s) => s.id === targetStationId);
         const stationName = station?.name || 'Trạm mục tiêu';
 
         // Update teamStationKeys state & localStorage
         setTeamStationKeys((prev) => {
           const currentList = prev[teamId] || [];
-          if (!currentList.includes(targetStationId)) {
-            const updated = { ...prev, [teamId]: [...currentList, targetStationId] };
+          if (!currentList.includes(targetStationId!)) {
+            const updated = { ...prev, [teamId]: [...currentList, targetStationId!] };
             try {
               localStorage.setItem('evermyst_team_station_keys', JSON.stringify(updated));
             } catch {
@@ -1012,7 +1094,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
       addToast('Đã sử dụng đạo cụ!', 'success');
       return { success: true };
     },
-    [teamItems, teams, stations, addToast, refreshAll]
+    [teamItems, teams, stations, teamStationKeys, addToast, refreshAll]
   );
 
   const activateTeamItem = useCallback(
@@ -1026,11 +1108,33 @@ export function GameProvider({ children }: { children: ReactNode }) {
   // ACTIONS: PVP COMBAT (Deadlock-Safe + Shield Backlash - Nguyên tắc 1, 2)
   // =========================================================================
   const resolvePvP = useCallback(
-    async (attackerId: string, defenderId: string): Promise<PvPResponse> => {
+    async (attackerId: string, defenderId: string, attackCost: number = 0): Promise<PvPResponse> => {
+      // 1. Chặn tự tấn công chính mình
+      if (attackerId === defenderId) {
+        const err = 'Không thể tự tấn công đội của chính mình!';
+        addToast(err, 'error');
+        return { success: false, error: err };
+      }
+
+      const attacker = teams.find((t) => t.id === attackerId);
+      const defender = teams.find((t) => t.id === defenderId);
+      if (!attacker || !defender) {
+        addToast('Không tìm thấy thông tin một trong hai đội.', 'error');
+        return { success: false, error: 'Đội không tồn tại' };
+      }
+
+      // 2. Kiểm tra phí mua lượt nếu có
+      if (attackCost > 0 && attacker.light_balance < attackCost) {
+        const err = 'Đội tấn công không đủ Lumen để mua lượt PvP!';
+        addToast(err, 'error');
+        return { success: false, error: err };
+      }
+
       try {
         const res = await callRpc<any>('resolve_pvp', {
           p_attacker_id: attackerId,
           p_defender_id: defenderId,
+          p_attack_cost: attackCost || 0,
         });
 
         if (res.success) {
@@ -1047,22 +1151,52 @@ export function GameProvider({ children }: { children: ReactNode }) {
       }
 
       // RESILIENT CLIENT FALLBACK:
-      const attacker = teams.find((t) => t.id === attackerId);
-      const defender = teams.find((t) => t.id === defenderId);
-      if (!attacker || !defender) {
-        addToast('Không tìm thấy thông tin một trong hai đội.', 'error');
-        return { success: false, error: 'Đội không tồn tại' };
+      // Kiểm tra khiên của defender từ cả DB lẫn localStorage dự phòng
+      const localShields = getLocalShields();
+      const localEnd = localShields[defenderId];
+      const dbEnd = defender.shield_until;
+      const isShielded =
+        (dbEnd && new Date(dbEnd).getTime() > Date.now()) ||
+        (localEnd && new Date(localEnd).getTime() > Date.now());
+
+      let currentAttackerBalance = attacker.light_balance;
+
+      // Trừ phí mua lượt tấn công nếu có
+      if (attackCost > 0) {
+        currentAttackerBalance = Math.max(0, currentAttackerBalance - attackCost);
+        try {
+          await supabase.from('transactions').insert({
+            team_id: attackerId,
+            amount: -attackCost,
+            type: 'pvp_attack_cost',
+            description: `Mua lượt tấn công PvP nhắm vào ${defender.name}`,
+            status: 'approved',
+          });
+        } catch {
+          // ignore
+        }
       }
 
-      const isShielded = defender.shield_until ? new Date(defender.shield_until).getTime() > Date.now() : false;
-
       if (isShielded) {
-        // Backlash: -10 Lumen attacker
+        // Backlash: -10 Lumen attacker, defender được bảo toàn 100%
         const backlash = 10;
-        const newAttackerBalance = Math.max(0, attacker.light_balance - backlash);
+        const newAttackerBalance = Math.max(0, currentAttackerBalance - backlash);
 
         try {
           await supabase.from('teams').update({ light_balance: newAttackerBalance }).eq('id', attackerId);
+          await supabase.from('pvp_logs').insert({
+            attacker_team_id: attackerId,
+            defender_team_id: defenderId,
+            result: 'backlash',
+            stolen_amount: 0,
+          });
+          await supabase.from('transactions').insert({
+            team_id: attackerId,
+            amount: -backlash,
+            type: 'pvp_backlash',
+            description: `Phạt phản phệ Khiên Màn Sương từ ${defender.name} (-${backlash} Lumen)`,
+            status: 'approved',
+          });
         } catch {
           // ignore
         }
@@ -1079,6 +1213,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
           result: 'backlash',
           message: msg,
           stolen_amount: 0,
+          backlash_amount: backlash,
           attacker_balance: newAttackerBalance,
           defender_balance: defender.light_balance,
         };
@@ -1087,11 +1222,33 @@ export function GameProvider({ children }: { children: ReactNode }) {
       // Attack win: 15% (min 5)
       const stealAmount = Math.max(5, Math.min(defender.light_balance, Math.round(defender.light_balance * 0.15)));
       const newDefenderBalance = Math.max(0, defender.light_balance - stealAmount);
-      const newAttackerBalance = attacker.light_balance + stealAmount;
+      const newAttackerBalance = currentAttackerBalance + stealAmount;
 
       try {
         await supabase.from('teams').update({ light_balance: newDefenderBalance }).eq('id', defenderId);
         await supabase.from('teams').update({ light_balance: newAttackerBalance }).eq('id', attackerId);
+        await supabase.from('pvp_logs').insert({
+          attacker_team_id: attackerId,
+          defender_team_id: defenderId,
+          result: 'success',
+          stolen_amount: stealAmount,
+        });
+        await supabase.from('transactions').insert([
+          {
+            team_id: attackerId,
+            amount: stealAmount,
+            type: 'pvp_steal',
+            description: `Cướp +${stealAmount}✦ từ ${defender.name}`,
+            status: 'approved',
+          },
+          {
+            team_id: defenderId,
+            amount: -stealAmount,
+            type: 'pvp_stolen',
+            description: `Bị ${attacker.name} cướp -${stealAmount}✦`,
+            status: 'approved',
+          },
+        ]);
       } catch {
         // ignore
       }
@@ -1111,6 +1268,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
         success: true,
         result: 'success',
         amount_stolen: stealAmount,
+        stolen_amount: stealAmount,
         attacker_balance: newAttackerBalance,
         defender_balance: newDefenderBalance,
         message: msg,

@@ -73,7 +73,7 @@ export default function SupportPage() {
       <main className="flex-1 overflow-y-auto">
         {activeTab === 'station' && <StationTab selectedTeam={assignedTeam} />}
         {activeTab === 'shop' && <ShopTab selectedTeam={assignedTeam} />}
-        {activeTab === 'pvp' && <PvPTab />}
+        {activeTab === 'pvp' && <PvPTab selectedTeam={assignedTeam} />}
         {activeTab === 'history' && <HistoryTab selectedTeam={assignedTeam} />}
       </main>
 

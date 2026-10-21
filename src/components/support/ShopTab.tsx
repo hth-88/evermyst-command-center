@@ -43,6 +43,7 @@ export default function ShopTab({ selectedTeam }: ShopTabProps) {
     fetchTeamHints,
     buyItem,
     useItem,
+    addToast,
   } = useGame();
 
   // Đảm bảo luôn có đội active kể cả khi selectedTeam ban đầu là null
@@ -199,6 +200,10 @@ export default function ShopTab({ selectedTeam }: ShopTabProps) {
 
   const handleExecuteKey = async () => {
     if (!currentTeam || !selectedStationId || isProcessing) return;
+    if (activeKeyStationIds.includes(selectedStationId)) {
+      addToast?.('Trạm này đã được cắm Chìa Khóa Vạn Năng từ trước!', 'warning');
+      return;
+    }
     setIsProcessing(true);
 
     const res = await useItem(currentTeam.id, 'master_key', undefined, selectedStationId);
@@ -810,9 +815,12 @@ export default function ShopTab({ selectedTeam }: ShopTabProps) {
                   return (
                     <button
                       key={st.id}
-                      onClick={() => setSelectedStationId(st.id)}
+                      onClick={() => !alreadyHasKey && setSelectedStationId(st.id)}
+                      disabled={alreadyHasKey}
                       className={`w-full flex items-center justify-between p-3 rounded-xl border text-left transition-all ${
-                        selectedStationId === st.id
+                        alreadyHasKey
+                          ? 'opacity-50 cursor-not-allowed bg-evermyst-surface/40 border-evermyst-border/40 text-evermyst-text-muted'
+                          : selectedStationId === st.id
                           ? 'bg-amber-500/15 border-amber-500 text-white font-bold'
                           : 'bg-evermyst-card border-evermyst-border text-evermyst-text-dim hover:border-evermyst-border-light'
                       }`}
@@ -826,7 +834,7 @@ export default function ShopTab({ selectedTeam }: ShopTabProps) {
 
                       {alreadyHasKey && (
                         <span className="text-[10px] font-bold text-amber-400 flex items-center gap-0.5">
-                          <CheckCircle2 className="w-3 h-3" /> Đã cắm
+                          <CheckCircle2 className="w-3 h-3" /> Đã cắm chìa
                         </span>
                       )}
                     </button>
@@ -836,8 +844,8 @@ export default function ShopTab({ selectedTeam }: ShopTabProps) {
 
               <button
                 onClick={handleExecuteKey}
-                disabled={!selectedStationId || isProcessing}
-                className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-500 to-yellow-500 text-evermyst-bg font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 active:scale-95 transition-all"
+                disabled={!selectedStationId || isProcessing || activeKeyStationIds.includes(selectedStationId)}
+                className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-500 to-yellow-500 text-evermyst-bg font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isProcessing ? (
                   <Loader2 className="w-4 h-4 animate-spin" />

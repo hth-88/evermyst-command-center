@@ -1,20 +1,16 @@
 // ============================================================================
-// DYNAMIC STATION SCORING FORM (src/components/scoring/StationScoringForm.tsx)
+// DIRECT STATION SCORING FORM (src/components/scoring/StationScoringForm.tsx)
 // File: src/components/scoring/StationScoringForm.tsx
-// Renderer chấm điểm động theo scoring_type (TierPicker, UnitStepper, OptionChecklist)
-// Dùng chung cho Support nộp điểm, Station Master nhập trực tiếp & duyệt kèm chỉnh
+// Nhập điểm dương trực tiếp cho đội tại trạm (Direct Points Input)
+// Hỗ trợ nút chọn nhanh (+50, +100, +150, +200, +250, +500) & chặn nhập số âm
 // ============================================================================
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { ScoringType, ScoringConfig, ScoringInput } from '@/scoring/types';
-import { previewPoints } from '@/scoring/preview';
-import { TierPicker } from './TierPicker';
-import { UnitStepper } from './UnitStepper';
-import { OptionChecklist } from './OptionChecklist';
-import { Sparkles, AlertCircle, Info } from 'lucide-react';
+import { Sparkles, AlertCircle, PlusCircle } from 'lucide-react';
 
 interface StationScoringFormProps {
-  scoringType: ScoringType;
-  scoringConfig: ScoringConfig;
+  scoringType?: ScoringType;
+  scoringConfig?: ScoringConfig;
   minScore?: number;
   maxScore?: number;
   initialInput?: ScoringInput;
@@ -23,119 +19,140 @@ interface StationScoringFormProps {
   className?: string;
 }
 
+export const DEFAULT_FALLBACK_TIERS = [
+  { tier: 'tier_1', label: 'Giải mã hoàn hảo', points: 50 },
+  { tier: 'tier_2', label: 'Hoàn thành tiêu chuẩn', points: 30 },
+  { tier: 'tier_3', label: 'Hoàn thành trễ hạn', points: 15 },
+];
+
+const QUICK_FILL_POINTS = [50, 100, 150, 200, 250, 500];
+
 export const StationScoringForm: React.FC<StationScoringFormProps> = ({
-  scoringType = 'tier',
-  scoringConfig = {},
-  minScore = 0,
-  maxScore = 100,
   initialInput,
   onChange,
   readOnly = false,
   className = '',
 }) => {
-  // Khởi tạo state input dựa trên scoringType
-  const [currentInput, setCurrentInput] = useState<ScoringInput>(() => {
-    if (initialInput && Object.keys(initialInput).length > 0) {
-      return initialInput;
+  // Khởi tạo điểm từ initialInput nếu có (hỗ trợ sửa claim)
+  const [pointsStr, setPointsStr] = useState<string>(() => {
+    if (initialInput) {
+      const initVal =
+        (initialInput as any).custom_points ??
+        (initialInput as any).points ??
+        (initialInput as any).units;
+      if (typeof initVal === 'number' && initVal > 0) {
+        return String(initVal);
+      }
     }
-    if (scoringType === 'tier') {
-      const tiers = (scoringConfig as any)?.tiers || [];
-      return { tier: tiers[0]?.tier || '' };
-    }
-    if (scoringType === 'fixed') {
-      return { completed: true, selected_options: [] };
-    }
-    if (scoringType === 'time_attack') {
-      return { units: 1 };
-    }
-    return {};
+    return '50';
   });
 
-  // Khi initialInput thay đổi (ví dụ mở modal sửa claim)
-  useEffect(() => {
-    if (initialInput && Object.keys(initialInput).length > 0) {
-      setCurrentInput(initialInput);
-    }
-  }, [initialInput]);
+  const [hasInteracted, setHasInteracted] = useState(false);
 
-  // Tính điểm xem trước (Preview)
-  const preview = useMemo(() => {
-    return previewPoints(scoringType, scoringConfig, currentInput, minScore, maxScore);
-  }, [scoringType, scoringConfig, currentInput, minScore, maxScore]);
+  // Parse & validate nghiêm ngặt số nguyên dương
+  const trimmed = pointsStr.trim();
+  const parsedPoints = parseInt(trimmed, 10);
+  const isNumericOnly = /^\d+$/.test(trimmed);
+  const isPositiveInteger = isNumericOnly && !isNaN(parsedPoints) && parsedPoints > 0;
+  const isValid = isPositiveInteger;
 
-  // Báo cho component cha mỗi khi input hoặc preview thay đổi
+  const errorMessage = !trimmed
+    ? 'Vui lòng nhập số điểm cộng cho đội.'
+    : !isValid
+    ? 'Điểm cộng tại trạm phải lớn hơn 0 (Chỉ Admin mới có quyền trừ điểm).'
+    : null;
+
+  // Báo cho component cha mỗi khi điểm thay đổi
   useEffect(() => {
     if (onChange) {
-      onChange(currentInput, preview.points, preview.isValid);
+      const validPoints = isValid ? parsedPoints : 0;
+      const formattedInput: ScoringInput = {
+        custom_points: validPoints,
+        points: validPoints,
+        tier: 'tier_1',
+        completed: true,
+        units: validPoints,
+      };
+      onChange(formattedInput, validPoints, isValid);
     }
-  }, [currentInput, preview.points, preview.isValid, onChange]);
+  }, [pointsStr, isValid, parsedPoints, onChange]);
 
-  // Handlers cho từng model
-  const handleTierChange = (tier: string) => {
-    if (readOnly) return;
-    setCurrentInput({ tier });
+  // Ngăn chặn các phím dấu trừ, dấu chấm, ký tự e/E
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (['-', '+', 'e', 'E', '.'].includes(e.key)) {
+      e.preventDefault();
+    }
   };
 
-  const handleUnitsChange = (units: number) => {
-    if (readOnly) return;
-    setCurrentInput({ units });
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setHasInteracted(true);
+    const val = e.target.value.replace(/[^0-9]/g, '');
+    setPointsStr(val);
   };
 
-  const handleToggleCompleted = (completed: boolean) => {
+  const handleQuickFill = (val: number) => {
     if (readOnly) return;
-    setCurrentInput((prev) => ({ ...prev, completed }));
-  };
-
-  const handleToggleOption = (optionId: string) => {
-    if (readOnly) return;
-    setCurrentInput((prev: any) => {
-      const current = prev.selected_options || [];
-      const updated = current.includes(optionId)
-        ? current.filter((id: string) => id !== optionId)
-        : [...current, optionId];
-      return { ...prev, selected_options: updated };
-    });
+    setHasInteracted(true);
+    setPointsStr(String(val));
   };
 
   return (
     <div className={`space-y-4 ${className}`}>
-      {/* 1. Dynamic Input Controls */}
-      <div className="space-y-3">
-        {scoringType === 'tier' && (
-          <TierPicker
-            tiers={(scoringConfig as any)?.tiers || []}
-            selectedTier={(currentInput as any)?.tier}
-            onChange={handleTierChange}
-            disabled={readOnly}
-          />
-        )}
+      {/* 1. Ô Nhập Điểm Trực Tiếp */}
+      <div className="space-y-2">
+        <label className="text-xs font-bold text-evermyst-text-muted uppercase tracking-wider flex items-center justify-between">
+          <span className="flex items-center gap-1.5 text-white">
+            <PlusCircle className="w-3.5 h-3.5 text-lumen" />
+            Nhập số điểm cộng trực tiếp:
+          </span>
+          <span className="text-[10px] text-evermyst-text-dim">Chỉ số nguyên &gt; 0</span>
+        </label>
 
-        {scoringType === 'time_attack' && (
-          <UnitStepper
-            units={(currentInput as any)?.units ?? 0}
-            basePoints={(scoringConfig as any)?.base_points}
-            unitPoints={(scoringConfig as any)?.unit_points}
-            maxUnits={(scoringConfig as any)?.max_units}
-            unitLabel={(scoringConfig as any)?.unit_label}
-            onChange={handleUnitsChange}
+        <div className="relative">
+          <input
+            type="number"
+            min="1"
+            step="1"
             disabled={readOnly}
+            value={pointsStr}
+            onChange={handleChange}
+            onKeyDown={handleKeyDown}
+            placeholder="Nhập số điểm cộng cho đội (VD: 250, 500)..."
+            className="w-full h-14 px-4 bg-evermyst-surface border border-evermyst-border rounded-2xl text-lg font-black font-mono text-white placeholder:text-evermyst-text-muted focus:outline-none focus:border-lumen focus:ring-1 focus:ring-lumen transition-all"
           />
-        )}
+          <div className="absolute right-4 top-1/2 -translate-y-1/2 text-sm font-bold text-lumen font-mono pointer-events-none">
+            ✦ Lumen
+          </div>
+        </div>
 
-        {scoringType === 'fixed' && (
-          <OptionChecklist
-            completed={Boolean((currentInput as any)?.completed)}
-            points={(scoringConfig as any)?.points ?? maxScore}
-            options={(scoringConfig as any)?.options || []}
-            selectedOptions={(currentInput as any)?.selected_options || []}
-            onToggleCompleted={handleToggleCompleted}
-            onToggleOption={handleToggleOption}
-            disabled={readOnly}
-          />
+        {/* Nút Gợi Ý Bấm Nhanh (Quick-fill Pills) */}
+        {!readOnly && (
+          <div className="space-y-1 pt-0.5">
+            <div className="text-[11px] text-evermyst-text-muted">Chọn nhanh mức điểm:</div>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {QUICK_FILL_POINTS.map((pts) => {
+                const isSelected = pointsStr === String(pts);
+                return (
+                  <button
+                    key={pts}
+                    type="button"
+                    onClick={() => handleQuickFill(pts)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold font-mono transition-all border active:scale-95 ${
+                      isSelected
+                        ? 'bg-lumen text-evermyst-bg border-lumen font-black shadow-md shadow-lumen/25'
+                        : 'bg-evermyst-card border-evermyst-border text-evermyst-text hover:border-evermyst-border-light hover:text-white'
+                    }`}
+                  >
+                    +{pts}✦
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         )}
       </div>
 
-      {/* 2. Điểm Dự Kiến Live Preview Badge */}
+      {/* 2. Live Preview Badge */}
       <div className="p-3.5 rounded-2xl bg-gradient-to-r from-lumen/10 via-lumen/5 to-transparent border border-lumen/25 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-xl bg-lumen/20 flex items-center justify-center text-lumen">
@@ -143,29 +160,29 @@ export const StationScoringForm: React.FC<StationScoringFormProps> = ({
           </div>
           <div>
             <div className="text-xs font-bold text-white uppercase tracking-wider">
-              Điểm Dự Kiến
+              Tổng Điểm Cộng
             </div>
             <div className="text-[10px] text-evermyst-text-muted">
-              {preview.isValid ? 'Tính theo quy tắc trạm hiện hành' : preview.error}
+              {isValid ? 'Cộng trực tiếp vào số dư đội sau khi gửi' : 'Chưa nhập điểm hợp lệ'}
             </div>
           </div>
         </div>
 
         <div className="text-right">
           <div className="text-2xl font-black text-lumen font-mono leading-none">
-            +{preview.points}✦
+            +{isValid ? parsedPoints : 0}✦
           </div>
           <span className="text-[9px] text-evermyst-text-dim uppercase font-bold">
-            [{minScore}..{maxScore}✦]
+            [Khởi điểm &gt; 0✦]
           </span>
         </div>
       </div>
 
-      {/* Error notification nếu input không hợp lệ */}
-      {!preview.isValid && preview.error && (
-        <div className="p-3 rounded-xl bg-danger/15 border border-danger/30 text-danger-light text-xs flex items-center gap-2">
+      {/* 3. Thông báo lỗi khi không hợp lệ */}
+      {hasInteracted && !isValid && errorMessage && (
+        <div className="p-3 rounded-xl bg-danger/15 border border-danger/30 text-danger-light text-xs flex items-center gap-2 animate-fadeIn">
           <AlertCircle className="w-4 h-4 shrink-0 text-danger" />
-          <span>{preview.error}</span>
+          <span>{errorMessage}</span>
         </div>
       )}
     </div>

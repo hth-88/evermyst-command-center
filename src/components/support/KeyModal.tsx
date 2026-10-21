@@ -4,6 +4,7 @@
 // Chọn trạm chưa clear để kích hoạt Chìa Khóa Cổ Tích (Mở lối tắt)
 // ============================================================================
 import React, { useState } from 'react';
+import { useGame } from '@/contexts/GameContext';
 import { callRpc } from '@/lib/rpc';
 import type { Station } from '@/lib/types';
 import { Key, MapPin, CheckCircle, AlertCircle, X, Loader2 } from 'lucide-react';
@@ -14,6 +15,7 @@ interface KeyModalProps {
   itemId: string;
   stations: Station[];
   unlockedStationIds?: string[];
+  teamId?: string;
   onSuccess: () => void;
 }
 
@@ -23,8 +25,11 @@ export const KeyModal: React.FC<KeyModalProps> = ({
   itemId,
   stations = [],
   unlockedStationIds = [],
+  teamId,
   onSuccess,
 }) => {
+  const { teamStationKeys } = useGame();
+  const teamKeys = teamId ? teamStationKeys[teamId] || [] : [];
   const [selectedStationId, setSelectedStationId] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -98,19 +103,22 @@ export const KeyModal: React.FC<KeyModalProps> = ({
           <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
             {activeStations.map((st) => {
               const isCleared = unlockedStationIds.includes(st.id);
+              const alreadyHasKey = teamKeys.includes(st.id);
               const isSelected = selectedStationId === st.id;
+              const isDisabled = isCleared || alreadyHasKey;
 
               return (
                 <button
                   key={st.id}
                   type="button"
-                  disabled={isCleared}
+                  disabled={isDisabled}
                   onClick={() => {
+                    if (isDisabled) return;
                     setSelectedStationId(st.id);
                     setErrorMsg(null);
                   }}
                   className={`w-full p-3 rounded-2xl border flex items-center justify-between text-left transition-all ${
-                    isCleared
+                    isDisabled
                       ? 'bg-evermyst-surface/40 border-evermyst-border/40 opacity-40 cursor-not-allowed'
                       : isSelected
                       ? 'bg-amber-500/15 border-amber-500 text-white shadow-md shadow-amber-500/10 ring-1 ring-amber-500'
@@ -130,6 +138,10 @@ export const KeyModal: React.FC<KeyModalProps> = ({
                   {isCleared ? (
                     <span className="text-[10px] font-bold text-success px-2 py-0.5 rounded bg-success/15 shrink-0 flex items-center gap-1">
                       <CheckCircle className="w-3 h-3" /> Đã clear
+                    </span>
+                  ) : alreadyHasKey ? (
+                    <span className="text-[10px] font-bold text-amber-400 px-2 py-0.5 rounded bg-amber-500/15 shrink-0 flex items-center gap-1">
+                      <Key className="w-3 h-3" /> Đã cắm chìa
                     </span>
                   ) : (
                     <span className="text-xs font-mono font-bold text-amber-400 shrink-0">
