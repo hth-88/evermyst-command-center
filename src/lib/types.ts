@@ -202,7 +202,25 @@ export interface StationClaim {
   tx_id?: string | null;
   created_at: string;
   updated_at: string;
+}export interface StationPlay {
+  id: string;
+  team_id: string;
+  station_id: string;
+  play_no: number;
+  points: number;
+  status: 'active' | 'reversed';
+  tx_id: string | null;
+  staff_id: string | null;
+  staff_name: string;
+  note: string | null;
+  client_request_id: string;
+  created_at: string;
+  reversed_at?: string | null;
+  reversed_by?: string | null;
+  team_name?: string;
+  station_name?: string;
 }
+
 
 export interface PvPLog {
   id: string;
@@ -375,45 +393,34 @@ export interface AdminRevokeSessionsParams {
   p_token?: string;
   p_staff_id: string;
 }
-
-export interface SubmitStationClaimParams {
+export interface AwardStationDirectPointsParams {
   p_token?: string;
+  p_team_id: string;
   p_station_id: string;
-  p_input: Record<string, any>;
+  p_points: number;
   p_client_request_id?: string;
-  p_team_id?: string | null;
+  p_note?: string | null;
 }
 
-export interface VerifyStationClaimParams {
+export interface ReverseStationPlayParams {
   p_token?: string;
-  p_claim_id: string;
-  p_action: 'approve' | 'reject';
-  p_note?: string;
   p_client_request_id?: string;
-}
-
-export interface CancelStationClaimParams {
-  p_token?: string;
-  p_claim_id: string;
+  p_play_id: string;
   p_reason?: string;
 }
 
-export interface GetStationQueueParams {
+export interface GetTeamStationProgressParams {
   p_token?: string;
-  p_station_id?: string | null;
+  p_team_id: string;
+  p_station_id: string;
 }
 
-export interface GetTeamStationStatusParams {
+export interface GetStationRecentPlaysParams {
   p_token?: string;
   p_station_id?: string | null;
-}
-
-export interface AdminListClaimsParams {
-  p_token?: string;
-  p_status?: string;
   p_limit?: number;
-  p_offset?: number;
 }
+
 
 export interface PurchaseHintParams {
   p_token?: string;
@@ -570,12 +577,45 @@ export interface RpcMap {
   auth_verify_session: { args: AuthVerifySessionParams; return: LoginResponse };
   staff_logout: { args: StaffLogoutParams; return: RPCResponse };
   admin_revoke_sessions: { args: AdminRevokeSessionsParams; return: RPCResponse<{ revoked_count: number }> };
-  submit_station_claim: { args: SubmitStationClaimParams; return: RPCResponse<{ claim_id: string; status: ClaimStatus; computed_points: number; is_exclusive: boolean }> };
-  verify_station_claim: { args: VerifyStationClaimParams; return: RPCResponse<{ claim_id: string; status: ClaimStatus; final_points?: number; tx_id?: string }> };
-  cancel_station_claim: { args: CancelStationClaimParams; return: RPCResponse };
-  get_station_queue: { args: GetStationQueueParams; return: RPCResponse<{ station_id: string; station?: any; teams?: Array<{ id: string; name: string }>; queue: StationClaim[]; recent_processed?: any[] }> };
-  get_team_station_status: { args: GetTeamStationStatusParams; return: RPCResponse<{ claims: StationClaim[]; keys_count: number }> };
-  admin_list_claims: { args: AdminListClaimsParams; return: RPCResponse<{ claims: StationClaim[]; total: number }> };
+  award_station_direct_points: {
+    args: AwardStationDirectPointsParams;
+    return: RPCResponse<{
+      play_id: string;
+      tx_id: string | null;
+      points: number;
+      play_no: number;
+      new_balance: number;
+      station_name?: string;
+      team_name?: string;
+    }>;
+  };
+  reverse_station_play: {
+    args: ReverseStationPlayParams;
+    return: RPCResponse<{
+      play_id: string;
+      reversal_tx_id: string | null;
+      points_deducted: number;
+      new_balance: number;
+    }>;
+  };
+  get_team_station_progress: {
+    args: GetTeamStationProgressParams;
+    return: RPCResponse<{
+      team_id: string;
+      station_id: string;
+      play_count: number;
+      total_points: number;
+      can_play: boolean;
+      history: StationPlay[];
+    }>;
+  };
+  get_station_recent_plays: {
+    args: GetStationRecentPlaysParams;
+    return: RPCResponse<{
+      station_id: string | null;
+      plays: StationPlay[];
+    }>;
+  };
   purchase_hint: { args: PurchaseHintParams; return: RPCResponse<{ hint_id: string; hint_title: string; hint_content: string; price: number; new_balance: number; tx_id: string }> };
   purchase_item: { args: PurchaseItemParams; return: RPCResponse<{ item_id: string; item_name: string; price: number; new_balance: number; tx_id: string; new_quantity?: number; shield_until?: string }> };
   use_team_item: { args: UseTeamItemParams; return: RPCResponse<{ item_id: string; effect_type: string; remaining_quantity: number; shield_until?: string; spy_data?: any; key_granted?: boolean }> };

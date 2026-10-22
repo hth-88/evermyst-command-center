@@ -75,6 +75,10 @@ interface GameContextType {
     amount: number,
     unlockStation: boolean
   ) => Promise<StationRewardResponse>;
+  awardStationDirectPoints: (teamId: string, stationId: string, points: number, note?: string) => Promise<RPCResponse>;
+  reverseStationPlay: (playId: string, reason?: string) => Promise<RPCResponse>;
+  getTeamStationProgress: (teamId: string, stationId: string) => Promise<RPCResponse>;
+  getStationRecentPlays: (stationId?: string, limit?: number) => Promise<RPCResponse>;
 
   // Actions - Shop & Hints & Inventory
   buyHint: (teamId: string, hintId: string) => Promise<BuyHintResponse>;
@@ -262,10 +266,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
         txRes,
         pvpRes,
         settingsRes,
-        keysRes,
       ] = await Promise.all([
         supabase.from('teams').select('*').order('light_balance', { ascending: false }),
-        supabase.from('stations').select('*').order('order_index', { ascending: true }),
+        supabase.from('stations').select('*').is('deleted_at', null).order('order_index', { ascending: true }),
         supabase.from('hints').select('id, station_id, title, content, tier, order_index, is_active, created_at').order('order_index', { ascending: true }),
         supabase.from('team_hints').select('*'),
         supabase.from('items').select('*').order('price', { ascending: true }),
@@ -273,7 +276,6 @@ export function GameProvider({ children }: { children: ReactNode }) {
         supabase.from('transactions').select('*').order('created_at', { ascending: false }).limit(200),
         supabase.from('pvp_logs').select('*').order('created_at', { ascending: false }).limit(100),
         supabase.from('game_settings').select('*'),
-        supabase.from('team_station_keys').select('*'),
       ]);
 
       if (teamsRes.data) {
@@ -299,8 +301,11 @@ export function GameProvider({ children }: { children: ReactNode }) {
       }
 
       if (stationsRes.data) {
+        // Lọc cứng loại bỏ trạm đã bị soft-delete
+        const activeOnlyStations = (stationsRes.data as Station[]).filter((st: any) => !st.deleted_at);
+
         // Chuẩn hóa mọi trạm có scoring_type === 'tier' nhưng thiếu scoring_config?.tiers
-        const normalizedStations = (stationsRes.data as Station[]).map((st) => {
+        const normalizedStations = activeOnlyStations.map((st) => {
           if (
             st.scoring_type === 'tier' &&
             (!Array.isArray((st.scoring_config as any)?.tiers) ||
@@ -317,15 +322,25 @@ export function GameProvider({ children }: { children: ReactNode }) {
           return st;
         });
 
-        // Deduplicate stations by order_index
-        const uniqueStations: Station[] = [];
-        const seenOrder = new Set<number>();
+        // Deduplicate stations by order_index, ưu tiên trạm is_active và created_at mới nhất
+        const stationMap = new Map<number, Station>();
         normalizedStations.forEach((st: Station) => {
-          if (!seenOrder.has(st.order_index)) {
-            seenOrder.add(st.order_index);
-            uniqueStations.push(st);
+          const existing = stationMap.get(st.order_index);
+          if (!existing) {
+            stationMap.set(st.order_index, st);
+          } else {
+            if (!existing.is_active && st.is_active) {
+              stationMap.set(st.order_index, st);
+            } else if (existing.is_active === st.is_active) {
+              const existingTime = existing.created_at ? new Date(existing.created_at).getTime() : 0;
+              const newTime = st.created_at ? new Date(st.created_at).getTime() : 0;
+              if (newTime > existingTime) {
+                stationMap.set(st.order_index, st);
+              }
+            }
           }
         });
+        const uniqueStations = Array.from(stationMap.values()).sort((a, b) => a.order_index - b.order_index);
         setStations(uniqueStations.length > 0 ? uniqueStations : normalizedStations);
       }
 
@@ -415,22 +430,6 @@ export function GameProvider({ children }: { children: ReactNode }) {
         setTeamItems(mappedTeamItems);
       }
 
-      // Sync team_station_keys
-      if (keysRes?.data) {
-        const keyMap: Record<string, string[]> = {};
-        keysRes.data.forEach((k: any) => {
-          if (!keyMap[k.team_id]) keyMap[k.team_id] = [];
-          if (!keyMap[k.team_id].includes(k.station_id)) {
-            keyMap[k.team_id].push(k.station_id);
-          }
-        });
-        setTeamStationKeys(keyMap);
-        try {
-          localStorage.setItem('evermyst_team_station_keys', JSON.stringify(keyMap));
-        } catch {
-          // ignore
-        }
-      }
 
       if (txRes.data) setTransactions(txRes.data);
       if (pvpRes.data) setPvpLogs(pvpRes.data);
@@ -516,8 +515,8 @@ export function GameProvider({ children }: { children: ReactNode }) {
       })
       // 7. Stations, Hints, Items (Admin CRUD)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'stations' }, () => {
-        supabase.from('stations').select('*').order('order_index', { ascending: true }).then(({ data }) => {
-          if (data) setStations(data);
+        supabase.from('stations').select('*').is('deleted_at', null).order('order_index', { ascending: true }).then(({ data }) => {
+          if (data) setStations(data.filter((s: any) => !s.deleted_at));
         });
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, () => {
@@ -550,32 +549,89 @@ export function GameProvider({ children }: { children: ReactNode }) {
   }, [refreshAll]);
 
   // =========================================================================
-  // ACTIONS: STATION REWARD (Idempotent + Atomic - Nguyên tắc 1, 2)
+  // ACTIONS: DIRECT STATION SCORING (Migration 104)
   // =========================================================================
+  const awardStationDirectPoints = useCallback(
+    async (
+      teamId: string,
+      stationId: string,
+      points: number,
+      note?: string
+    ): Promise<RPCResponse> => {
+      const res = await callRpc('award_station_direct_points', {
+        p_team_id: teamId,
+        p_station_id: stationId,
+        p_points: points,
+        p_note: note || null,
+      });
+
+      if (res.success) {
+        addToast(res.message || `+${points}✦ Lumen đã được cộng trực tiếp cho đội!`, 'success');
+        await refreshAll();
+      } else {
+        addToast(res.error || res.message || 'Lỗi khi cộng điểm trạm', 'error');
+      }
+      return res;
+    },
+    [addToast, refreshAll]
+  );
+
+  const reverseStationPlay = useCallback(
+    async (playId: string, reason?: string): Promise<RPCResponse> => {
+      const res = await callRpc('reverse_station_play', {
+        p_play_id: playId,
+        p_reason: reason || 'Hoàn tác điểm trạm',
+      });
+
+      if (res.success) {
+        addToast(res.message || 'Đã hoàn tác điểm trạm thành công!', 'info');
+        await refreshAll();
+      } else {
+        addToast(res.error || res.message || 'Lỗi khi hoàn tác điểm trạm', 'error');
+      }
+      return res;
+    },
+    [addToast, refreshAll]
+  );
+
+  const getTeamStationProgress = useCallback(
+    async (teamId: string, stationId: string): Promise<RPCResponse> => {
+      return await callRpc('get_team_station_progress', {
+        p_team_id: teamId,
+        p_station_id: stationId,
+      });
+    },
+    []
+  );
+
+  const getStationRecentPlays = useCallback(
+    async (stationId?: string, limit = 20): Promise<RPCResponse> => {
+      return await callRpc('get_station_recent_plays', {
+        p_station_id: stationId || null,
+        p_limit: limit,
+      });
+    },
+    []
+  );
+
   const executeStationReward = useCallback(
     async (
       teamId: string,
       stationId: string,
       amount: number,
-      unlockStation: boolean
+      _unlockStation: boolean
     ): Promise<StationRewardResponse> => {
-      const res = await callRpc<any>('submit_station_claim', {
-        p_station_id: stationId,
-        p_team_id: teamId,
-        p_input: {
-          points: amount,
-          unlock_station: unlockStation,
-        },
-      });
-
-      if (res.success) {
-        addToast(res.message || 'Gửi yêu cầu chấm điểm trạm thành công!', res.status === 'pending' ? 'warning' : 'success');
-      } else {
-        addToast(res.error || 'Lỗi khi gửi yêu cầu chấm điểm', 'error');
-      }
-      return res as StationRewardResponse;
+      const res = await awardStationDirectPoints(teamId, stationId, amount);
+      return {
+        success: res.success,
+        message: res.message,
+        error: res.error,
+        status: res.success ? 'approved' : 'rejected',
+        computed_points: amount,
+        final_points: amount,
+      } as StationRewardResponse;
     },
-    [addToast]
+    [awardStationDirectPoints]
   );
 
   // =========================================================================
@@ -1070,16 +1126,6 @@ export function GameProvider({ children }: { children: ReactNode }) {
           return prev;
         });
 
-        // Insert into Supabase team_station_keys table
-        try {
-          await supabase.from('team_station_keys').insert({
-            team_id: teamId,
-            station_id: targetStationId,
-          });
-        } catch {
-          // ignore
-        }
-
         const msg = `🗝️ Đã kích hoạt Chìa Khóa Vạn Năng tại ${stationName}!`;
         addToast(msg, 'success');
         return {
@@ -1280,24 +1326,6 @@ export function GameProvider({ children }: { children: ReactNode }) {
   // =========================================================================
   // ACTIONS: APPROVALS & REVERSAL (Nguyên tắc 6)
   // =========================================================================
-  const decidePending = useCallback(
-    async (txId: string, decision: 'approve' | 'reject', reason: string = ''): Promise<RPCResponse> => {
-      const res = await callRpc<any>('verify_station_claim', {
-        p_claim_id: txId,
-        p_action: decision,
-        p_note: reason,
-      });
-
-      if (res.success) {
-        addToast(res.message || 'Đã xử lý yêu cầu', decision === 'approve' ? 'success' : 'warning');
-      } else {
-        addToast(res.error || 'Lỗi xử lý yêu cầu', 'error');
-      }
-      return res;
-    },
-    [addToast]
-  );
-
   const reverseTransaction = useCallback(
     async (txId: string, reason: string = ''): Promise<RPCResponse> => {
       const res = await callRpc<any>('reverse_transaction', {
@@ -1313,6 +1341,17 @@ export function GameProvider({ children }: { children: ReactNode }) {
       return res;
     },
     [addToast]
+  );
+
+  const decidePending = useCallback(
+    async (txId: string, decision: 'approve' | 'reject', reason: string = ''): Promise<RPCResponse> => {
+      if (decision === 'reject') {
+        return await reverseTransaction(txId, reason || 'Admin từ chối giao dịch');
+      }
+      addToast('Giao dịch đã được ghi nhận trực tiếp trên hệ thống.', 'info');
+      return { success: true, message: 'Đã hoàn tất.' } as RPCResponse;
+    },
+    [addToast, reverseTransaction]
   );
 
   // =========================================================================
@@ -1527,6 +1566,10 @@ export function GameProvider({ children }: { children: ReactNode }) {
         isLoading,
         isConnected,
         executeStationReward,
+        awardStationDirectPoints,
+        reverseStationPlay,
+        getTeamStationProgress,
+        getStationRecentPlays,
         buyHint,
         fetchTeamHints,
         buyItem,

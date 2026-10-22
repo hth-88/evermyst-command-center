@@ -9,6 +9,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSession } from '@/contexts/SessionContext';
 import { useGame } from '@/contexts/GameContext';
+import { supabase } from '@/lib/supabase';
 import { callRpc } from '@/lib/rpc';
 import { useSignal } from '@/hooks/useSignal';
 import { ConnectionIndicator } from '@/components/common/ConnectionIndicator';
@@ -19,7 +20,7 @@ import { ItemEditorModal } from '@/components/admin/ItemEditorModal';
 import { StaffModal } from '@/components/admin/StaffModal';
 import { AdjustBalanceModal } from '@/components/admin/AdjustBalanceModal';
 import { ForceRevertModal } from '@/components/admin/ForceRevertModal';
-import type { Team, Station, Hint, Item, Staff, Transaction } from '@/lib/types';
+import type { Team, Station, Hint, Item, Staff, Transaction, StationPlay } from '@/lib/types';
 import {
   Shield,
   Trophy,
@@ -52,6 +53,7 @@ export default function AdminPage() {
     stations,
     hints,
     items,
+    transactions,
     refreshAll,
     isConnected,
     config,
@@ -62,9 +64,9 @@ export default function AdminPage() {
     'approvals' | 'teams' | 'stations' | 'hints' | 'items' | 'staff' | 'settings'
   >('approvals');
 
-  // Dữ liệu hàng chờ claims của Admin
-  const [pendingClaims, setPendingClaims] = useState<any[]>([]);
-  const [isLoadingClaims, setIsLoadingClaims] = useState(true);
+  // Dữ liệu đối soát lượt chấm điểm trạm của Admin
+  const [stationPlays, setStationPlays] = useState<StationPlay[]>([]);
+  const [isLoadingPlays, setIsLoadingPlays] = useState(false);
 
   // Danh sách nhân sự
   const [staffList, setStaffList] = useState<Staff[]>([]);
@@ -91,19 +93,23 @@ export default function AdminPage() {
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsMsg, setSettingsMsg] = useState<string | null>(null);
 
-  // Tải danh sách claims pending_admin
-  const fetchPendingClaims = useCallback(async () => {
+  // Tải danh sách lượt chấm điểm trạm từ bảng station_plays trên Supabase DB
+  const fetchStationPlays = useCallback(async () => {
+    setIsLoadingPlays(true);
     try {
-      const res = await callRpc<{ success: boolean; claims: any[] }>('admin_list_claims', {
-        p_status: 'pending_admin',
-      });
-      if (res.success && Array.isArray((res as any).claims)) {
-        setPendingClaims((res as any).claims);
+      const { data, error } = await supabase
+        .from('station_plays')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (!error && data) {
+        setStationPlays(data);
       }
     } catch (err) {
-      console.error('Lỗi tải danh sách claim admin:', err);
+      console.error('Lỗi tải danh sách lượt chấm station_plays:', err);
     } finally {
-      setIsLoadingClaims(false);
+      setIsLoadingPlays(false);
     }
   }, []);
 
@@ -122,7 +128,7 @@ export default function AdminPage() {
     }
   }, []);
 
-  // Tải danh sách Audit Log
+  // Tải danh sách Audit Log từ RPC hoặc fallback transactions
   const fetchAuditLogs = useCallback(async () => {
     setIsLoadingAudit(true);
     try {
@@ -140,19 +146,49 @@ export default function AdminPage() {
     }
   }, [auditFilter]);
 
+  // Làm giàu dữ liệu lượt chấm trạm bằng useMemo lúc render
+  const enrichedStationPlays = useMemo(() => {
+    return stationPlays.map((play: any) => ({
+      ...play,
+      team_name: play.team_name || teams.find((t) => t.id === play.team_id)?.name || 'Đội chơi',
+      station_name: play.station_name || stations.find((s) => s.id === play.station_id)?.name || 'Trạm Thử Thách',
+    }));
+  }, [stationPlays, teams, stations]);
+
+  // Bộ lọc giao dịch: Luôn đảm bảo đọc đủ mọi transaction từ PostgreSQL trên cả tab Ẩn Danh
+  const displayTransactions = useMemo(() => {
+    const rawList: any[] = auditLogs.length > 0 ? auditLogs : transactions;
+    const enriched = rawList.map((tx: any) => ({
+      ...tx,
+      team_name: tx.team_name || teams.find((t: any) => t.id === tx.team_id)?.name || 'Đội chơi',
+      can_reverse: !tx.is_reversed && tx.type !== 'reversal',
+    }));
+
+    if (auditFilter === 'all') return enriched;
+    if (auditFilter === 'station') return enriched.filter((t: any) => t.type === 'station_clear');
+    if (auditFilter === 'shop') return enriched.filter((t: any) => t.type === 'buy_item' || t.type === 'shop_item' || t.type === 'buy_hint' || t.type === 'hint_purchase');
+    if (auditFilter === 'pvp') return enriched.filter((t: any) => t.type === 'pvp_steal' || t.type === 'pvp_backlash');
+    if (auditFilter === 'reversal') return enriched.filter((t: any) => t.type === 'reversal' || t.is_reversed);
+    return enriched;
+  }, [auditLogs, transactions, teams, auditFilter]);
+
   // Đăng ký Realtime signals
   const { status: claimSignalStatus, refetchNow: refetchClaims } = useSignal(
     'station_claims_changed',
-    fetchPendingClaims
+    fetchStationPlays
   );
-  const { refetchNow: refetchLedger } = useSignal('transactions_changed', fetchAuditLogs);
+  const { refetchNow: refetchLedger } = useSignal('transactions_changed', () => {
+    fetchAuditLogs();
+    fetchStationPlays();
+    refreshAll();
+  });
   const { refetchNow: refetchTeamsSignal } = useSignal('teams_changed', refreshAll);
 
   useEffect(() => {
-    fetchPendingClaims();
+    fetchStationPlays();
     fetchStaffList();
     fetchAuditLogs();
-  }, [fetchPendingClaims, fetchStaffList, fetchAuditLogs]);
+  }, [fetchStationPlays, fetchStaffList, fetchAuditLogs]);
 
   // Hoàn tác tiêu chuẩn (standard revert)
   const handleStandardRevert = async (txId: string) => {
@@ -261,7 +297,7 @@ export default function AdminPage() {
           <button
             onClick={() => {
               refreshAll();
-              fetchPendingClaims();
+              fetchStationPlays();
               fetchAuditLogs();
             }}
             className="p-2 rounded-xl bg-evermyst-card border border-evermyst-border text-evermyst-text-dim hover:text-lumen transition-colors"
@@ -392,10 +428,10 @@ export default function AdminPage() {
               }`}
             >
               <CheckCircle2 className="w-3.5 h-3.5" />
-              Phê Duyệt
-              {pendingClaims.length > 0 && (
-                <span className="px-1.5 py-0.2 rounded-full bg-danger text-white text-[10px] font-black animate-pulse">
-                  {pendingClaims.length}
+              Đối Soát Trạm
+              {stationPlays.filter((p) => p.status === 'active').length > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-lumen text-evermyst-bg text-[10px] font-black">
+                  {stationPlays.filter((p) => p.status === 'active').length}
                 </span>
               )}
             </button>
@@ -476,16 +512,19 @@ export default function AdminPage() {
           {/* Console Content */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
             {/* ------------------------------------------------------------- */}
-            {/* TAB 1: PHÊ DUYỆT (PENDING ADMIN QUEUE) */}
+            {/* TAB 1: ĐỐI SOÁT LƯỢT CHẤM ĐIỂM TRẠM GẦN NHẤT */}
             {/* ------------------------------------------------------------- */}
             {activeTab === 'approvals' && (
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <h3 className="text-xs font-bold text-evermyst-text-muted uppercase tracking-wider">
-                    Hàng Chờ Duyệt Lại Của BTC ({pendingClaims.length})
+                    Đối Soát Lượt Chấm Điểm Trạm Gần Nhất ({stationPlays.length})
                   </h3>
                   <button
-                    onClick={fetchPendingClaims}
+                    onClick={() => {
+                      fetchStationPlays();
+                      refreshAll();
+                    }}
                     className="text-xs text-lumen font-bold hover:underline"
                   >
                     Làm mới
@@ -493,8 +532,11 @@ export default function AdminPage() {
                 </div>
 
                 <PendingAdminQueue
-                  claims={pendingClaims}
-                  onRefresh={fetchPendingClaims}
+                  plays={enrichedStationPlays}
+                  onRefresh={() => {
+                    fetchStationPlays();
+                    refreshAll();
+                  }}
                 />
               </div>
             )}
@@ -880,17 +922,17 @@ export default function AdminPage() {
 
           {/* Audit Logs List */}
           <div className="flex-1 overflow-y-auto p-3 space-y-2.5">
-            {isLoadingAudit ? (
+            {isLoadingAudit && displayTransactions.length === 0 ? (
               <div className="py-12 text-center space-y-2">
                 <div className="w-6 h-6 border-2 border-lumen border-t-transparent rounded-full animate-spin mx-auto" />
                 <p className="text-xs text-evermyst-text-dim">Đang tải sổ cái...</p>
               </div>
-            ) : auditLogs.length === 0 ? (
+            ) : displayTransactions.length === 0 ? (
               <div className="py-12 text-center text-xs text-evermyst-text-dim">
                 Không tìm thấy giao dịch nào phù hợp bộ lọc.
               </div>
             ) : (
-              auditLogs.map((tx) => {
+              displayTransactions.map((tx: any) => {
                 const canReverse = tx.can_reverse === true;
                 const isReversal = tx.type === 'reversal';
 

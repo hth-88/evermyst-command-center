@@ -289,21 +289,6 @@ export default function PvPTab({ selectedTeam }: PvPTabProps = {}) {
         />
       </div>
 
-      {/* Warnings: Defender Shield Active */}
-      {defender && defenderShield.active && (
-        <div className="p-3.5 rounded-2xl bg-props/15 border border-props/40 space-y-1.5 animate-fadeIn">
-          <div className="flex items-center gap-2 text-xs font-bold text-props">
-            <ShieldAlert className="w-4 h-4 shrink-0" />
-            <span>CẢNH BÁO: Đội phòng thủ đang có Khiên Màn Sương!</span>
-          </div>
-          <p className="text-xs text-props-light leading-relaxed">
-            Nếu tấn công bây giờ, {attacker?.name || 'Đội tấn công'} sẽ bị <strong>phản phệ</strong> và bị phạt -{config.pvp_backlash_amount} Lumen!
-          </p>
-          <div className="text-[11px] font-mono text-props font-bold pt-0.5">
-            {defenderShield.label}
-          </div>
-        </div>
-      )}
 
       {/* Warnings: Cooldown Active */}
       {pairCooldown.active && (
@@ -464,11 +449,6 @@ export default function PvPTab({ selectedTeam }: PvPTabProps = {}) {
             <Loader2 className="w-5 h-5 animate-spin" />
             ĐANG TÍNH TOÁN COMBAT...
           </>
-        ) : defenderShield.active ? (
-          <>
-            <ShieldAlert className="w-5 h-5" />
-            VẪN TẤN CÔNG (SẼ BỊ PHẢN PHỆ)
-          </>
         ) : (
           <>
             <Zap className="w-5 h-5 fill-current" />
@@ -482,7 +462,7 @@ export default function PvPTab({ selectedTeam }: PvPTabProps = {}) {
         <div
           className={`p-4 rounded-2xl border space-y-3 animate-slideUp ${
             lastResult.result === 'backlash'
-              ? 'bg-props/15 border-props/50'
+              ? 'bg-props/20 border-props/60 ring-2 ring-props/30 shadow-lg shadow-props/10'
               : lastResult.result === 'success'
               ? 'bg-success/15 border-success/50'
               : 'bg-evermyst-card border-evermyst-border'
@@ -490,23 +470,25 @@ export default function PvPTab({ selectedTeam }: PvPTabProps = {}) {
         >
           <div className="flex items-center gap-2">
             {lastResult.result === 'backlash' ? (
-              <ShieldAlert className="w-5 h-5 text-props shrink-0" />
+              <ShieldAlert className="w-6 h-6 text-props shrink-0 animate-bounce" />
             ) : lastResult.result === 'success' ? (
               <Sparkles className="w-5 h-5 text-success shrink-0" />
             ) : (
               <AlertTriangle className="w-5 h-5 text-warning shrink-0" />
             )}
-            <h4 className="text-sm font-black text-evermyst-text">
+            <h4 className="text-sm font-black text-evermyst-text uppercase">
               {lastResult.result === 'backlash'
-                ? 'KẾT QUẢ: PHẢN PHỆ!'
+                ? '🛡️ BỊ PHẢN PHỆ BỞI KHIÊN MÀN SƯƠNG!'
                 : lastResult.result === 'success'
                 ? 'KẾT QUẢ: CƯỚP THÀNH CÔNG!'
                 : 'THÔNG BÁO'}
             </h4>
           </div>
 
-          <p className="text-xs text-evermyst-text leading-relaxed">
-            {lastResult.message || lastResult.error}
+          <p className="text-xs text-evermyst-text leading-relaxed font-semibold">
+            {lastResult.result === 'backlash'
+              ? `🛡️ BỊ PHẢN PHỆ! ${defender?.name || 'Đội Phòng Thủ'} đang ẩn mình trong Khiên Màn Sương! Đội phòng thủ mất 0✦, ${attacker?.name || 'Đội Tấn Công'} bị phản đòn -10✦ Lumen!`
+              : (lastResult.message || lastResult.error)}
           </p>
 
           {/* Chi tiết phí lượt / minh chứng */}

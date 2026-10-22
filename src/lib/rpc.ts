@@ -11,9 +11,8 @@ export const TOKEN_STORAGE_KEY = 'evermyst_token';
 
 // Danh sách các RPC ghi nhận thay đổi số dư hoặc dữ liệu (Mutations)
 const MUTATION_RPCS = new Set([
-  'submit_station_claim',
-  'verify_station_claim',
-  'cancel_station_claim',
+  'award_station_direct_points',
+  'reverse_station_play',
   'purchase_hint',
   'purchase_item',
   'use_team_item',
@@ -34,7 +33,8 @@ const MUTATION_RPCS = new Set([
 
 // Danh sách các RPC nhận tham số p_client_request_id
 const IDEMPOTENT_MUTATIONS = new Set([
-  'submit_station_claim',
+  'award_station_direct_points',
+  'reverse_station_play',
   'purchase_hint',
   'purchase_item',
   'resolve_pvp',

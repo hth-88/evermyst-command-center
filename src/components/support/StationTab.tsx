@@ -1,24 +1,18 @@
 // ============================================================================
 // SUPPORT STATION TAB (src/components/support/StationTab.tsx)
 // File: src/components/support/StationTab.tsx
-// Danh sách 5 trạm với 5 trạng thái (Chưa làm, Chờ Quản Trò, Chờ BTC, Đã xong, Bị từ chối)
-// Nút nộp bị khóa khi slot bị chiếm, có nút "Rút lại", hiện badge Chìa Khóa (ADR-4)
+// Danh sách các trạm với Direct Station Scoring (Migration 104)
+// Giữ nguyên form nhập điểm trực tiếp (> 0) và các nút chọn nhanh
 // ============================================================================
 import React, { useState, useEffect, useCallback } from 'react';
 import { useGame } from '@/contexts/GameContext';
-import { supabase } from '@/lib/supabase';
-import { callRpc } from '@/lib/rpc';
-import { StationScoringForm, DEFAULT_FALLBACK_TIERS } from '@/components/scoring/StationScoringForm';
-import { formatScoringInput } from '@/scoring/format';
+import { StationScoringForm } from '@/components/scoring/StationScoringForm';
 import type { Team, Station } from '@/lib/types';
 import type { ScoringInput } from '@/scoring/types';
 import {
   MapPin,
-  Clock,
   CheckCircle2,
   XCircle,
-  AlertCircle,
-  Key,
   RotateCcw,
   Send,
   Loader2,
@@ -41,168 +35,120 @@ interface StationStatusItem {
   has_key: boolean;
   active_claim?: {
     id: string;
-    status: 'draft' | 'pending_station' | 'pending_admin' | 'approved' | 'rejected' | 'cancelled';
+    status: 'approved' | 'unattempted';
     points: number;
     created_at: string;
-    input?: Record<string, any>;
-    reject_reason?: string;
   } | null;
 }
 
 export default function StationTab({ selectedTeam }: StationTabProps) {
-  const { stations, teamStationKeys, refreshAll } = useGame();
+  const { stations, transactions, refreshAll, awardStationDirectPoints, addToast } = useGame();
   const [stationStatuses, setStationStatuses] = useState<StationStatusItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [, setIsLoading] = useState(true);
   const [activeFormStationId, setActiveFormStationId] = useState<string | null>(null);
 
   // Form input state
   const [formData, setFormData] = useState<Record<string, { input: ScoringInput; points: number; isValid: boolean }>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
 
-  const teamKeys = selectedTeam ? teamStationKeys[selectedTeam.id] || [] : [];
-
-  // Tải trạng thái các trạm của đội
+  // Tải trạng thái các trạm của đội từ DB thật qua GameContext
   const fetchStationStatuses = useCallback(async () => {
     if (!selectedTeam) return;
     try {
-      const res = await callRpc<any>('get_team_station_status');
-      if (res.success && Array.isArray(res.stations)) {
-        const enriched = res.stations.map((st: StationStatusItem) => {
-          const isTier = st.scoring_type === 'tier';
-          const tiers = (st.scoring_config as any)?.tiers;
-          const config = isTier && (!tiers || tiers.length === 0)
-            ? { ...st.scoring_config, tiers: DEFAULT_FALLBACK_TIERS }
-            : st.scoring_config;
-          return {
-            ...st,
-            scoring_config: config,
-            has_key: st.has_key || teamKeys.includes(st.station_id),
-          };
-        });
-        setStationStatuses(enriched);
-      } else {
-        // Fallback tự sinh từ danh sách stations và team
-        const activeStations = stations.filter((s) => s.is_active);
-        const mapped = activeStations.map((st) => {
-          const isTier = st.scoring_type === 'tier';
-          const tiers = (st.scoring_config as any)?.tiers;
-          const config = isTier && (!tiers || tiers.length === 0)
-            ? { ...st.scoring_config, tiers: DEFAULT_FALLBACK_TIERS }
-            : st.scoring_config;
-          return {
-            station_id: st.id,
-            station_name: st.name,
-            order_index: st.order_index,
-            scoring_type: st.scoring_type,
-            scoring_config: config,
-            allow_multiple_attempts: st.allow_multiple_attempts,
-            has_key: teamKeys.includes(st.id) || false,
-            active_claim: selectedTeam.unlocked_stations?.includes(st.id)
-              ? { id: 'done', status: 'approved' as const, points: st.max_score, created_at: new Date().toISOString() }
-              : null,
-          };
-        });
-        setStationStatuses(mapped);
-      }
-    } catch {
-      // ignore
+      const activeStations = stations.filter((s: any) => !s.deleted_at && s.is_active);
+      const teamStationTx = transactions.filter(
+        (t) => t.team_id === selectedTeam.id && t.type === 'station_clear' && !t.is_reversed
+      );
+
+      const mapped = activeStations.map((st) => {
+        const isUnlocked = selectedTeam.unlocked_stations?.includes(st.id);
+        const relatedTx = teamStationTx.find((tx) =>
+          tx.description?.includes(st.name) || (tx.metadata as any)?.station_id === st.id
+        );
+        const pointsEarned = relatedTx ? relatedTx.amount : (isUnlocked ? (st.max_score || 50) : 0);
+
+        return {
+          station_id: st.id,
+          station_name: st.name,
+          order_index: st.order_index,
+          scoring_type: st.scoring_type,
+          scoring_config: st.scoring_config || {},
+          allow_multiple_attempts: st.allow_multiple_attempts,
+          has_key: false,
+          active_claim: isUnlocked
+            ? {
+                id: relatedTx?.id || 'done',
+                status: 'approved' as const,
+                points: pointsEarned,
+                created_at: relatedTx?.created_at || new Date().toISOString(),
+              }
+            : null,
+        };
+      });
+
+      setStationStatuses(mapped);
+    } catch (err) {
+      console.error('Lỗi tính toán trạng thái trạm:', err);
     } finally {
       setIsLoading(false);
     }
-  }, [selectedTeam, stations, teamKeys]);
+  }, [selectedTeam, stations, transactions]);
 
   useEffect(() => {
     fetchStationStatuses();
   }, [fetchStationStatuses]);
 
-  // Handler nộp yêu cầu chấm điểm
+  // Handler nộp điểm trạm trực tiếp qua RPC Migration 104
   const handleSubmitClaim = async (station: Station | StationStatusItem) => {
     if (!selectedTeam || isSubmitting) return;
 
     const stId = (station as any).station_id || (station as any).id;
     const data = formData[stId];
     if (!data || !data.isValid) {
-      alert('Vui lòng hoàn tất nhập liệu hợp lệ trước khi gửi yêu cầu.');
+      alert('Vui lòng nhập số điểm cộng hợp lệ (> 0).');
       return;
     }
 
     const pointsToAward = data.points || Number((data.input as any)?.custom_points) || 50;
     setIsSubmitting(true);
     try {
-      let res = await callRpc<any>('submit_station_claim', {
-        p_station_id: stId,
-        p_input: data.input,
-      });
-
-      // Nếu DB là legacy schema chưa có submit_station_claim hoặc RPC trả về lỗi
-      if (!res.success) {
-        res = await callRpc<any>('award_station', {
-          p_team_id: selectedTeam.id,
-          p_station_id: stId,
-          p_amount: pointsToAward,
-          p_unlock_station: true,
-        });
-      }
-
-      // Client Fallback dự phòng: cập nhật số dư teams và ghi lịch sử transactions
-      if (!res.success) {
-        try {
-          const currentBal = selectedTeam.light_balance;
-          const newBal = currentBal + pointsToAward;
-          const currentUnlocked = selectedTeam.unlocked_stations || [];
-          const newUnlocked = currentUnlocked.includes(stId)
-            ? currentUnlocked
-            : [...currentUnlocked, stId];
-
-          await supabase.from('teams').update({
-            light_balance: newBal,
-            unlocked_stations: newUnlocked,
-          }).eq('id', selectedTeam.id);
-
-          await supabase.from('transactions').insert({
-            team_id: selectedTeam.id,
-            amount: pointsToAward,
-            type: 'station_clear',
-            description: `Vượt trạm ${(station as any).station_name || (station as any).name || 'Trạm'} (+${pointsToAward} Lumen)`,
-            status: 'approved',
-          });
-          res = { success: true };
-        } catch {
-          // ignore
-        }
-      }
+      const res = await awardStationDirectPoints(
+        selectedTeam.id,
+        stId,
+        pointsToAward,
+        `Support chấm điểm trạm cho đội ${selectedTeam.name}`
+      );
 
       if (res.success) {
+        addToast(`+${pointsToAward}✦ Lumen đã được cộng trực tiếp cho đội!`, 'success');
         setActiveFormStationId(null);
-        await fetchStationStatuses();
+        // Cập nhật điểm tức thì trên thẻ trạm
+        setStationStatuses((prev) =>
+          prev.map((item) => {
+            if (item.station_id === stId) {
+              const prevPoints = item.active_claim?.points || 0;
+              return {
+                ...item,
+                active_claim: {
+                  id: (res.data as any)?.play_id || 'done',
+                  status: 'approved',
+                  points: item.allow_multiple_attempts ? prevPoints + pointsToAward : pointsToAward,
+                  created_at: new Date().toISOString(),
+                },
+              };
+            }
+            return item;
+          })
+        );
         await refreshAll();
+        await fetchStationStatuses();
       } else {
-        alert(res.error || res.message || 'Không thể gửi yêu cầu chấm điểm.');
+        alert(res.error || res.message || 'Không thể cộng điểm trạm.');
       }
+    } catch (err: any) {
+      alert(err.message || 'Lỗi khi cộng điểm trạm.');
     } finally {
       setIsSubmitting(false);
-    }
-  };
-
-  // Handler rút lại claim pending_station
-  const handleCancelClaim = async (claimId: string) => {
-    if (!confirm('Bạn có chắc chắn muốn rút lại yêu cầu chấm điểm này?')) return;
-
-    setActionLoadingId(claimId);
-    try {
-      const res = await callRpc('cancel_station_claim', {
-        p_claim_id: claimId,
-      });
-
-      if (res.success) {
-        await fetchStationStatuses();
-        await refreshAll();
-      } else {
-        alert(res.error || res.message || 'Không thể rút lại yêu cầu.');
-      }
-    } finally {
-      setActionLoadingId(null);
     }
   };
 
@@ -220,17 +166,19 @@ export default function StationTab({ selectedTeam }: StationTabProps) {
     );
   }
 
-  // Danh sách hiển thị: kết hợp giữa stations và status
-  const displayItems = stationStatuses.length > 0 ? stationStatuses : stations.map((s) => ({
+  // Danh sách hiển thị: kết hợp giữa stations và status, chỉ các trạm chưa bị soft delete và active
+  const displayItems = (stationStatuses.length > 0 ? stationStatuses : stations.map((s) => ({
     station_id: s.id,
     station_name: s.name,
     order_index: s.order_index,
     scoring_type: s.scoring_type,
-    scoring_config: s.scoring_config,
+    scoring_config: s.scoring_config || {},
     allow_multiple_attempts: s.allow_multiple_attempts,
     has_key: false,
-    active_claim: null,
-  }));
+    active_claim: selectedTeam.unlocked_stations?.includes(s.id)
+      ? { id: 'done', status: 'approved' as const, points: s.max_score || 50, created_at: new Date().toISOString() }
+      : null,
+  }))).filter((st: any) => !st.deleted_at);
 
   return (
     <div className="p-4 space-y-4 pb-28 animate-fadeIn">
@@ -242,32 +190,31 @@ export default function StationTab({ selectedTeam }: StationTabProps) {
             Lộ Trình Thử Thách
           </h2>
           <p className="text-[11px] text-evermyst-text-muted">
-            5 trạm thử thách độc quyền cho {selectedTeam.name}
+            Danh sách trạm thử thách cho {selectedTeam.name}
           </p>
         </div>
 
         <button
-          onClick={fetchStationStatuses}
+          onClick={async () => {
+            await refreshAll();
+            await fetchStationStatuses();
+          }}
           className="text-[11px] font-bold text-lumen hover:underline flex items-center gap-1"
         >
           <RotateCcw className="w-3 h-3" /> Làm mới
         </button>
       </div>
 
-      {/* Danh sách 5 Trạm với 5 Trạng Thái */}
+      {/* Danh sách các Trạm */}
       <div className="space-y-3">
         {displayItems.map((item, idx) => {
           const stationId = item.station_id;
           const claim = item.active_claim;
-          const status = claim?.status || 'unattempted';
-          const isUnlocked = selectedTeam.unlocked_stations?.includes(stationId) || status === 'approved';
-          const isPendingStation = status === 'pending_station';
-          const isPendingAdmin = status === 'pending_admin';
-          const isRejected = status === 'rejected';
+          const isUnlocked = selectedTeam.unlocked_stations?.includes(stationId) || claim?.status === 'approved';
           const isFormOpen = activeFormStationId === stationId;
 
-          // Slot đã bị chiếm nếu là trạm độc quyền (is_exclusive) và đang có claim pending hoặc approved
-          const isSlotLocked = !item.allow_multiple_attempts && (isPendingStation || isPendingAdmin || isUnlocked);
+          // Cho phép chấm nếu chưa hoàn thành hoặc trạm cho phép đa lượt
+          const canScore = !isUnlocked || item.allow_multiple_attempts;
 
           return (
             <div
@@ -275,12 +222,6 @@ export default function StationTab({ selectedTeam }: StationTabProps) {
               className={`rounded-2xl border transition-all overflow-hidden ${
                 isUnlocked
                   ? 'bg-success/5 border-success/30'
-                  : isPendingStation
-                  ? 'bg-warning/5 border-warning/30'
-                  : isPendingAdmin
-                  ? 'bg-props/5 border-props/30'
-                  : isRejected
-                  ? 'bg-danger/5 border-danger/30'
                   : 'bg-evermyst-card border-evermyst-border'
               }`}
             >
@@ -294,13 +235,6 @@ export default function StationTab({ selectedTeam }: StationTabProps) {
                     <h3 className="text-sm font-black text-white leading-tight">
                       {item.station_name}
                     </h3>
-
-                    {/* Badge Chìa Khóa Vạn Năng */}
-                    {item.has_key && (
-                      <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/50 text-amber-300 text-[11px] font-black flex items-center gap-1.5 shadow-lg shadow-amber-500/10 animate-pulse">
-                        <Key className="w-3.5 h-3.5 text-amber-400" /> 🗝️ CHÌA KHÓA VẠN NĂNG
-                      </span>
-                    )}
                   </div>
 
                   <div className="text-[11px] text-evermyst-text-muted flex items-center gap-2">
@@ -313,27 +247,12 @@ export default function StationTab({ selectedTeam }: StationTabProps) {
                   </div>
                 </div>
 
-                {/* Status Badge 1 trong 5 Trạng Thái */}
+                {/* Status Badge */}
                 <div className="shrink-0 text-right">
                   {isUnlocked ? (
                     <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-success/15 text-success font-bold text-xs">
                       <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>+{claim?.points ?? ''}✦ Đã xong</span>
-                    </div>
-                  ) : isPendingStation ? (
-                    <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-warning/15 text-warning font-bold text-xs animate-pulse">
-                      <Clock className="w-3.5 h-3.5" />
-                      <span>Chờ Quản Trò</span>
-                    </div>
-                  ) : isPendingAdmin ? (
-                    <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-props/15 text-props font-bold text-xs">
-                      <Sparkles className="w-3.5 h-3.5" />
-                      <span>Chờ BTC duyệt</span>
-                    </div>
-                  ) : isRejected ? (
-                    <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-danger/15 text-danger font-bold text-xs">
-                      <XCircle className="w-3.5 h-3.5" />
-                      <span>Bị từ chối</span>
+                      <span>+{claim?.points ?? ''}✦ Đã hoàn thành</span>
                     </div>
                   ) : (
                     <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-evermyst-surface text-evermyst-text-dim text-xs font-semibold">
@@ -343,50 +262,9 @@ export default function StationTab({ selectedTeam }: StationTabProps) {
                 </div>
               </div>
 
-              {/* Status Details / Actions */}
+              {/* Actions & Form Chấm Điểm */}
               <div className="px-4 pb-4 space-y-3">
-                {/* 1. Trạng thái: Chờ Quản Trò -> Có nút Rút lại */}
-                {isPendingStation && claim && (
-                  <div className="p-3 rounded-xl bg-warning/10 border border-warning/20 text-xs flex items-center justify-between">
-                    <div>
-                      <div className="font-bold text-warning">
-                        Đang chờ Trạm xác nhận
-                      </div>
-                      <div className="text-[11px] text-evermyst-text-muted mt-0.5">
-                        {claim.input ? formatScoringInput(item.scoring_type, claim.input, item.scoring_config) : 'Đã nộp input'}
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      disabled={actionLoadingId === claim.id}
-                      onClick={() => handleCancelClaim(claim.id)}
-                      className="px-3 py-1.5 rounded-xl bg-danger/15 border border-danger/30 text-danger-light hover:bg-danger/25 text-xs font-bold transition-all flex items-center gap-1 active:scale-95"
-                    >
-                      {actionLoadingId === claim.id ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      ) : (
-                        'Rút lại'
-                      )}
-                    </button>
-                  </div>
-                )}
-
-                {/* 2. Trạng thái: Bị từ chối -> Hiện lý do & Cho phép nộp lại */}
-                {isRejected && (
-                  <div className="p-3 rounded-xl bg-danger/10 border border-danger/20 text-xs space-y-1">
-                    <div className="font-bold text-danger flex items-center gap-1.5">
-                      <AlertCircle className="w-3.5 h-3.5" />
-                      Lý do: {claim?.reject_reason || 'Chưa đạt yêu cầu trạm'}
-                    </div>
-                    <p className="text-[11px] text-evermyst-text-muted">
-                      Đội chơi được phép nộp lại yêu cầu chấm điểm mới.
-                    </p>
-                  </div>
-                )}
-
-                {/* 3. Nút Nộp Điểm / Mở Form (cho phép khi chưa xong, hoặc bị từ chối, hoặc trạm allow_multiple_attempts) */}
-                {(!isSlotLocked || item.allow_multiple_attempts) && (
+                {canScore && (
                   <div>
                     {!isFormOpen ? (
                       <button
@@ -395,7 +273,7 @@ export default function StationTab({ selectedTeam }: StationTabProps) {
                         className="w-full h-12 rounded-xl bg-evermyst-surface border border-evermyst-border hover:border-lumen/40 text-evermyst-text hover:text-white text-xs font-bold flex items-center justify-center gap-2 transition-all active:scale-[0.99]"
                       >
                         <Send className="w-3.5 h-3.5 text-lumen" />
-                        {isRejected ? 'Nộp lại kết quả' : item.allow_multiple_attempts && isUnlocked ? 'Nộp thêm lượt' : 'Nộp kết quả trạm'}
+                        {isUnlocked ? 'Cộng thêm điểm lượt mới' : 'Nhập điểm trạm trực tiếp'}
                         <ChevronDown className="w-3.5 h-3.5 text-evermyst-text-dim" />
                       </button>
                     ) : (
@@ -414,12 +292,12 @@ export default function StationTab({ selectedTeam }: StationTabProps) {
                           </button>
                         </div>
 
-                        {/* Renderer động */}
+                        {/* Nhập điểm trực tiếp với quick fill buttons */}
                         <StationScoringForm
                           scoringType={item.scoring_type as any}
                           scoringConfig={item.scoring_config}
                           minScore={0}
-                          maxScore={100}
+                          maxScore={500}
                           onChange={(input, points, isValid) => {
                             setFormData((prev) => ({
                               ...prev,
@@ -439,7 +317,7 @@ export default function StationTab({ selectedTeam }: StationTabProps) {
                             <Loader2 className="w-4 h-4 animate-spin" />
                           ) : (
                             <>
-                              <Send className="w-4 h-4" /> Gửi Yêu Cầu Chấm Điểm
+                              <Send className="w-4 h-4" /> XÁC NHẬN CỘNG ĐIỂM TRẠM
                             </>
                           )}
                         </button>
