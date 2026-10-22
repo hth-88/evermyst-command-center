@@ -130,7 +130,7 @@ export default function StationPage() {
     if (!currentStation || !selectedTeamId || isSubmitting) return;
 
     if (!scoreInput.isValid || scoreInput.points <= 0) {
-      alert('Vui lòng nhập số điểm hợp lệ (> 0).');
+      addToast('Vui lòng nhập số điểm hợp lệ (> 0).', 'warning');
       return;
     }
 
@@ -153,10 +153,10 @@ export default function StationPage() {
         await fetchRecentPlays();
         await refreshAll();
       } else {
-        alert(res.error || res.message || 'Lỗi khi cộng điểm trạm.');
+        addToast(res.error || res.message || 'Lỗi khi cộng điểm trạm.', 'error');
       }
     } catch (err: any) {
-      alert(err.message || 'Lỗi kết nối khi cộng điểm trạm.');
+      addToast(err.message || 'Lỗi kết nối khi cộng điểm trạm.', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -176,10 +176,10 @@ export default function StationPage() {
         await fetchRecentPlays();
         await refreshAll();
       } else {
-        alert(res.error || res.message || 'Không thể hoàn tác lượt chấm này.');
+        addToast(res.error || res.message || 'Không thể hoàn tác lượt chấm này.', 'error');
       }
     } catch (err: any) {
-      alert(err.message || 'Lỗi khi hoàn tác lượt chấm.');
+      addToast(err.message || 'Lỗi khi hoàn tác lượt chấm.', 'error');
     } finally {
       setReversingPlayId(null);
     }

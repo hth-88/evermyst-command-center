@@ -40,10 +40,10 @@ export const PendingAdminQueue: React.FC<StationPlaysAuditProps> = ({
         addToast(`Đã thu hồi -${play.points}✦ của ${teamName}!`, 'info');
         onRefresh();
       } else {
-        alert(res.error || res.message || 'Không thể hoàn tác lượt chấm này.');
+        addToast(res.error || res.message || 'Không thể hoàn tác lượt chấm này.', 'error');
       }
     } catch (err: any) {
-      alert(err.message || 'Lỗi kết nối khi hoàn tác.');
+      addToast(err.message || 'Lỗi kết nối khi hoàn tác.', 'error');
     } finally {
       setReversingId(null);
     }

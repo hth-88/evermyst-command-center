@@ -57,6 +57,7 @@ export default function AdminPage() {
     refreshAll,
     isConnected,
     config,
+    addToast,
   } = useGame();
 
   // Active Tab của Cột 2
@@ -200,14 +201,14 @@ export default function AdminPage() {
       });
 
       if (res.success) {
-        alert('Đã hoàn tác giao dịch thành công!');
+        addToast('Đã hoàn tác giao dịch thành công!', 'success');
         fetchAuditLogs();
         refreshAll();
       } else {
-        alert(res.error || res.message || 'Không thể hoàn tác.');
+        addToast(res.error || res.message || 'Không thể hoàn tác.', 'error');
       }
     } catch (err: any) {
-      alert(err.message || 'Lỗi hệ thống khi hoàn tác.');
+      addToast(err.message || 'Lỗi hệ thống khi hoàn tác.', 'error');
     }
   };
 
@@ -222,12 +223,12 @@ export default function AdminPage() {
       });
 
       if (res.success) {
-        alert(`Đã thu hồi thành công ${res.revoked_count ?? 1} phiên làm việc của ${staffName}!`);
+        addToast(`Đã thu hồi thành công ${res.revoked_count ?? 1} phiên làm việc của ${staffName}!`, 'success');
       } else {
-        alert(res.error || res.message || 'Không thể thu hồi phiên.');
+        addToast(res.error || res.message || 'Không thể thu hồi phiên.', 'error');
       }
     } catch (err: any) {
-      alert(err.message || 'Lỗi khi thu hồi phiên.');
+      addToast(err.message || 'Lỗi khi thu hồi phiên.', 'error');
     }
   };
 
